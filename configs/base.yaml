@@ -1,0 +1,13 @@
+seed: 2025
+device: "cpu"
+num_workers: 8
+
+# Training hyperparams:
+
+lr: 1e-3
+epochs: 100
+batch_size: 32
+
+
+# Model Parameters:
+
