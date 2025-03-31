@@ -1,9 +1,23 @@
+from logging import getLogger
 import numpy as np
-import os
 from PIL import Image
+from cdatasets import get_dataset
+
+import yaml
 
 
 def rscript():
+    log = getLogger("rscript")
+    with open("./configs/base.yaml", "r") as f:
+        config = yaml.load(f, Loader=yaml.FullLoader)
+
+    wrapper = get_dataset("standard", config, log)
+    ds = wrapper.get_split("train")
+    for x, y in ds:
+        print(x.shape, y.shape)
+
+    exit()
+
     rdir = "/mnt/cluster/nbl-datasets/fingervein/Foot_Print/Training/2 - Reference"
     fname = f"{rdir}/reference_data.npz"
     metadata = f"{rdir}/reference_metadata.csv"

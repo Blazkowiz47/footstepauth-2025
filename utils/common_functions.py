@@ -10,8 +10,8 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 
 
-image_extensions:List[str] = ['.jpg', '.png', '.jpeg']
-video_extensions:List[str] = ['.mov', '.mp4']
+image_extensions: List[str] = [".jpg", ".png", ".jpeg"]
+video_extensions: List[str] = [".mov", ".mp4"]
 
 
 def set_seeds(log: Logger, seed: int = 2024):
@@ -32,7 +32,7 @@ def set_seeds(log: Logger, seed: int = 2024):
 
 
 def get_run_name(model: str, dataset: str) -> str:
-    return f"{model}_{dataset}_{str(datetime.now()).replace(' ', '-')}"
+    return f"{model}_{dataset}_{str(datetime.now()).replace(' ', '_').replace('.','-').replace(':','-')}"
 
 
 def initialise_dirs(model_name: str):

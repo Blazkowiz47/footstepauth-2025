@@ -1,13 +1,20 @@
 seed: 2025
-device: "cpu"
+device: "cuda"
 num_workers: 8
+logger_level: "INFO"
+num_classes: 150
+prefetch_factor: 8
 
 # Training hyperparams:
-
-lr: 1e-3
-epochs: 100
-batch_size: 32
-
+lr: 0.001
+epochs: 150
+batch_size: 64
+validate_after_epochs: 1
+dataset: standard
+weight_decay: 0.05
 
 # Model Parameters:
+model: "simpleAttention"
 
+# Loss function:
+loss: "crossEntropy"

@@ -1,14 +1,17 @@
+import itertools
 from logging import Logger
-from pathlib import Path
-import os
+from os.path import join as pjoin
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-import cv2
+from tqdm import tqdm
 import numpy as np
-from PIL import Image
+import pandas as pd
 import torch
+import torch.nn.functional as F
+import torchvision.transforms as A
 from torch.utils.data import DataLoader
-from utils import DatasetGenerator, Wrapper, image_extensions
+
+from utils import DatasetGenerator, Wrapper
 
 
 class StandardWrapper(Wrapper):
@@ -19,50 +22,107 @@ class StandardWrapper(Wrapper):
         **kwargs,
     ):
         """
-        This is a demo wrapper.
-        Update the `loop_splitset` method for looping your dataset in a custom manner.
-        By default it fetches data stored in following manner relative to `./data/standard':
-            ROOT-DIR
-                -> ClassId1
-                    -> train
-                        -> Image1.jpg
-                    -> test
-                        -> Image1.jpeg
-                    -> validation
-                        -> Image1.jpeg
-                ...
+        Standard wrapper for foot auth dataset
         """
 
         self.name = "standard"
         self.log = log
         self.kwargs: Dict[str, Any] = kwargs
-        self.rdir = "./data/standard"
-        self.classes = [
-            cid
-            for cid in os.listdir(self.rdir)
-            if os.path.isdir(os.path.join(self.rdir, cid)) and '.' not in cid
-        ]
-        self.classes.sort()
+        self.traindir = "./data/1 - Training/"
+        self.classes = list(range(150))
         self.num_classes = len(self.classes)
 
         self.batch_size = config["batch_size"]
         self.num_workers = config["num_workers"]
+        self.prefetch_factor = config["prefetch_factor"]
+        self.participant_IDs = np.arange(1, 151)
+        self.speed_IDs = ["W1", "W2", "W3", "W4"]
+        self.footwear_IDs = ["BF", "ST", "P1", "P2"]
+        self.augmentation = A.Compose(
+            [
+                # self.resize,
+                self.normalise,
+            ]
+        )
+
+    def resize(self, x: torch.Tensor, size=(16, 32, 16)) -> torch.Tensor:
+        x = F.interpolate(x.unsqueeze(0), size=size, mode="trilinear")
+        return x.squeeze(0)
+
+    def normalise(self, x: torch.Tensor) -> torch.Tensor:
+        x = (x - x.min()) / (x.max() - x.min())
+        if torch.isnan(x).any():
+            x[torch.isnan(x)] = 0
+        return x
+
+    def init_metadata(self) -> pd.DataFrame:
+        metadata_lst = []
+        for participant_ID, footwear_ID, speed_ID in tqdm(
+            itertools.product(self.participant_IDs, self.footwear_IDs, self.speed_IDs),
+            desc="Loading metadata",
+        ):
+            metadata_path = pjoin(
+                self.traindir,
+                f"{participant_ID:03}",
+                footwear_ID,
+                speed_ID,
+                "metadata.csv",
+            )
+            metadata_lst.append(pd.read_csv(metadata_path))
+
+        metadata_train = pd.concat(metadata_lst).reset_index(drop=True)
+        self.log.info("Metadata loaded.")
+        self.log.info(f"Number of metadata files: {len(metadata_lst)}")
+
+        return metadata_train
 
     def loop_splitset(self, ssplit: str) -> List[Any]:
-        data: List[Any] = []
-        for cid_lbl, cid in enumerate(self.classes):
-            datapoints = [
-                str(file)
-                for file in Path(os.path.join(self.rdir, cid, ssplit)).glob("*")
-                if file.suffix.lower() in image_extensions
-            ]
-            for point in datapoints:
-                data.append((point, cid_lbl))
+        self.log.debug(f"Looping through splitset {ssplit}.")
+        metadata = self.init_metadata()
+        data = []
+        for _, row in metadata.iterrows():
+            participant_ID = row["ParticipantID"]
+            side = row["Side"]
+            footstep_ID = row["FootstepID"]
+            footwear_ID = row["Footwear"]
+            speed_ID = row["Speed"]
+            sample_path = pjoin(
+                self.traindir,
+                f"{participant_ID:03}",
+                str(footwear_ID),
+                str(speed_ID),
+                "pipeline_1.npz",
+            )
+            data.append((sample_path, f"{footstep_ID}", side, participant_ID - 1))
 
         return data
 
+    def transform(self, datapoint: Iterable[Any]) -> Tuple:
+        fname, footstep_ID, side, participant_ID = datapoint
+        footsteps = np.load(fname)
+        footstep = footsteps[f"{footstep_ID}"]
+
+        # flip right footsteps along x axis
+        if side == "Right":
+            footstep = np.flip(footstep, axis=2)
+
+        # add dimension for channel: shape (1,101,75,40) (channel,time,y,x)
+        footstep = footstep[None, :, :, :]
+        x = torch.from_numpy(footstep.astype(np.float32))
+        labels = np.zeros(self.num_classes)
+        labels[participant_ID - 1] = 1
+        y = torch.tensor(labels)
+        x = self.augmentation(x)
+        x = x.squeeze(0)
+
+        return x.float(), y.float()
+
     def get_split(
-            self, split:str, batch_size: Optional[int] = None, num_workers: Optional[int] = None
+        self,
+        split: str,
+        batch_size: Optional[int] = None,
+        num_workers: Optional[int] = None,
+        prefetch_factor: Optional[int] = None,
     ) -> DataLoader:
         batch_size = batch_size or self.batch_size
         self.log.debug("Looping through %s split." % split)
@@ -72,22 +132,10 @@ class StandardWrapper(Wrapper):
             DatasetGenerator(data, self.transform),
             num_workers=num_workers or self.num_workers,
             batch_size=batch_size or self.batch_size,
+            prefetch_factor=prefetch_factor or self.prefetch_factor,
+            pin_memory=True,
+            shuffle=True,
         )
 
     def augment(self, image: Any) -> Any:
         return image
-
-    def transform(self, datapoint: Iterable[Any]) -> Tuple:
-        fname, lbl = datapoint
-
-        # Initialise label
-        label = np.zeros((self.num_classes,))
-        label[lbl] = 1
-
-        # Initialise image
-        img = Image.open(fname)
-        imgarray = np.array(img)
-        imgarray = cv2.resize(imgarray, [224, 224])
-        imgarray = self.augment(imgarray)
-
-        return torch.tensor(imgarray).float(), torch.tensor(label).float()
